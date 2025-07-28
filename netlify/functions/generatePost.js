@@ -13,39 +13,30 @@ exports.handler = async function(event, context) {
             return { statusCode: 500, body: JSON.stringify({ error: 'API key is not configured.' }) };
         }
 
-        // 1. Generate Text using Gemini
+        // --- Step 1: Generate Text using Gemini ---
         const textPrompt = `Based on the following brand voice profile, write a compelling social media post about the topic provided. The post should be engaging and include relevant hashtags. Brand Voice Profile: ${brandVoice || 'Friendly, approachable, and professional.'} Topic: "${topic}"`;
         const textApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
         const textPayload = { contents: [{ role: "user", parts: [{ text: textPrompt }] }] };
+        
         const textResponse = await axios.post(textApiUrl, textPayload);
-        const generatedText = textResponse.data.candidates[0].content.parts[0].text;
+        const generatedText = textResponse.data.candidates?.[0]?.content?.parts?.[0]?.text;
 
         if (!generatedText) {
             throw new Error("AI did not return text content.");
         }
 
-        // 2. Generate Images using Imagen
+        // --- Step 2: Generate Images using Imagen (The Correct, Simpler Way) ---
         const imagePrompt = `A visually appealing, high-quality photograph for a social media post about: ${generatedText}. Do not include any text, words, or letters in the image.`;
         
-        // --- THIS IS THE FIX: The API endpoint for Imagen is different. ---
-        const imageApiUrl = `https://us-central1-aiplatform.googleapis.com/v1/projects/ezodusapp/locations/us-central1/publishers/google/models/imagen-3.0-generate-002:predict`;
+        // THIS IS THE FIX: Using the correct, simpler API endpoint for Imagen that works with just an API key.
+        const imageApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
         
-        const imagePayload = { instances: [{ prompt: imagePrompt }], parameters: { "sampleCount": 4 } };
-        
-        // We need to get an auth token to call this specific API
-        const { GoogleAuth } = require('google-auth-library');
-        const auth = new GoogleAuth({
-            scopes: 'https://www.googleapis.com/auth/cloud-platform'
-        });
-        const client = await auth.getClient();
-        const accessToken = (await client.getAccessToken()).token;
+        const imagePayload = { 
+            instances: [{ prompt: imagePrompt }], 
+            parameters: { "sampleCount": 4 } 
+        };
 
-        const imageResponse = await axios.post(imageApiUrl, imagePayload, {
-            headers: {
-                'Authorization': `Bearer ${accessToken}`,
-                'Content-Type': 'application/json'
-            }
-        });
+        const imageResponse = await axios.post(imageApiUrl, imagePayload);
         
         const imageUrls = imageResponse.data.predictions.map(pred => `data:image/png;base64,${pred.bytesBase64Encoded}`);
 
@@ -53,6 +44,7 @@ exports.handler = async function(event, context) {
             throw new Error("AI did not return any images.");
         }
 
+        // --- Step 3: Return Success ---
         return {
             statusCode: 200,
             body: JSON.stringify({ success: true, text: generatedText, images: imageUrls }),
