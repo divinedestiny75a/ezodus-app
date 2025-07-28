@@ -28,7 +28,10 @@ exports.handler = async function(event, context) {
 
         // --- Step 1: Generate Text using Gemini ---
         const textPrompt = `Based on the following brand voice profile, write a compelling social media post about the topic provided. The post should be engaging and include relevant hashtags. Brand Voice Profile: ${brandVoice || 'Friendly, approachable, and professional.'} Topic: "${topic}"`;
-        const textApiUrl = `https://us-central1-aiplatform.googleapis.com/v1/projects/${projectId}/locations/us-central1/publishers/google/models/gemini-1.0-pro:generateContent`;
+        
+        // --- THIS IS THE FIX: Using the correct, available model name ---
+        const textApiUrl = `https://us-central1-aiplatform.googleapis.com/v1/projects/${projectId}/locations/us-central1/publishers/google/models/gemini-1.5-flash-001:generateContent`;
+        
         const textPayload = { contents: [{ parts: [{ text: textPrompt }] }] };
         
         const textResponse = await axios.post(textApiUrl, textPayload, { headers });
