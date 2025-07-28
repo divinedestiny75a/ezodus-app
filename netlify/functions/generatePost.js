@@ -25,10 +25,28 @@ exports.handler = async function(event, context) {
         }
 
         // 2. Generate Images using Imagen
-        const imagePrompt = `A visually appealing, high-quality image for a social media post about: ${generatedText}. Do not include any text in the image.`;
-        const imageApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
+        const imagePrompt = `A visually appealing, high-quality photograph for a social media post about: ${generatedText}. Do not include any text, words, or letters in the image.`;
+        
+        // --- THIS IS THE FIX: The API endpoint for Imagen is different. ---
+        const imageApiUrl = `https://us-central1-aiplatform.googleapis.com/v1/projects/ezodusapp/locations/us-central1/publishers/google/models/imagen-3.0-generate-002:predict`;
+        
         const imagePayload = { instances: [{ prompt: imagePrompt }], parameters: { "sampleCount": 4 } };
-        const imageResponse = await axios.post(imageApiUrl, imagePayload);
+        
+        // We need to get an auth token to call this specific API
+        const { GoogleAuth } = require('google-auth-library');
+        const auth = new GoogleAuth({
+            scopes: 'https://www.googleapis.com/auth/cloud-platform'
+        });
+        const client = await auth.getClient();
+        const accessToken = (await client.getAccessToken()).token;
+
+        const imageResponse = await axios.post(imageApiUrl, imagePayload, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
+            }
+        });
+        
         const imageUrls = imageResponse.data.predictions.map(pred => `data:image/png;base64,${pred.bytesBase64Encoded}`);
 
         if (!imageUrls || imageUrls.length === 0) {
