@@ -10,11 +10,20 @@ exports.handler = async function(event, context) {
         const { topic, brandVoice } = JSON.parse(event.body);
         const projectId = 'ezodusapp'; 
 
+        // --- NEW: Check for Environment Variables ---
+        const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
+        const privateKey = process.env.GOOGLE_PRIVATE_KEY;
+
+        if (!clientEmail || !privateKey) {
+            console.error("Service account credentials (GOOGLE_CLIENT_EMAIL or GOOGLE_PRIVATE_KEY) are not set in Netlify environment variables.");
+            return { statusCode: 500, body: JSON.stringify({ success: false, error: 'Server configuration error: Missing credentials.' }) };
+        }
+
         // --- Authenticate using the Service Account ---
         const auth = new GoogleAuth({
             credentials: {
-                client_email: process.env.GOOGLE_CLIENT_EMAIL,
-                private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+                client_email: clientEmail,
+                private_key: privateKey.replace(/\\n/g, '\n'),
             },
             scopes: 'https://www.googleapis.com/auth/cloud-platform',
         });
@@ -28,10 +37,7 @@ exports.handler = async function(event, context) {
 
         // --- Step 1: Generate Text using Gemini ---
         const textPrompt = `Based on the following brand voice profile, write a compelling social media post about the topic provided. The post should be engaging and include relevant hashtags. Brand Voice Profile: ${brandVoice || 'Friendly, approachable, and professional.'} Topic: "${topic}"`;
-        
-        // --- THIS IS THE FIX: Using the correct, available model name ---
         const textApiUrl = `https://us-central1-aiplatform.googleapis.com/v1/projects/${projectId}/locations/us-central1/publishers/google/models/gemini-1.5-flash-001:generateContent`;
-        
         const textPayload = { contents: [{ parts: [{ text: textPrompt }] }] };
         
         const textResponse = await axios.post(textApiUrl, textPayload, { headers });
