@@ -1,22 +1,49 @@
 const axios = require("axios");
 
 exports.handler = async function (event, context) {
+  // Restrict to POST method
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
 
+  // Parse and validate request body
+  let data;
   try {
-    const { topic, brandVoice } = JSON.parse(event.body);
-    const apiKey = process.env.GEMINI_API_KEY;
+    data = JSON.parse(event.body);
+  } catch (parseError) {
+    return {
+      statusCode: 400,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Invalid JSON in request body." }),
+    };
+  }
 
-    if (!apiKey) {
-      return {
-        statusCode: 500,
-        body: JSON.stringify({ error: "API key not configured." }),
-      };
-    }
+  const topic = data.topic ? data.topic.trim() : null;
+  const brandVoice = data.brandVoice ? data.brandVoice.trim() : null;
 
-    // Step 1: Create a prompt for Gemini
+  if (!topic) {
+    return {
+      statusCode: 400,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Topic is required." }),
+    };
+  }
+
+  // Retrieve API key from environment variables
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return {
+      statusCode: 500,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error: "Gemini API key is not configured in the environment variables." }),
+    };
+  }
+
+  try {
+    // Log input for debugging
+    console.log(`Generating content for topic: "${topic}", brandVoice: "${brandVoice || "default"}"`);
+
+    // Construct prompt for text generation
     const textPrompt = `
       Write a high-quality, engaging social media post based on the following topic and tone.
       - Topic: ${topic}
@@ -24,49 +51,52 @@ exports.handler = async function (event, context) {
       - Style: Use hashtags, emojis, and a short call to action
     `;
 
-    // Step 2: Call Gemini API (text generation)
+    // Make API request to Gemini API
     const textApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`;
-
     const textPayload = {
       contents: [{ role: "user", parts: [{ text: textPrompt }] }],
     };
+    const textResponse = await axios.post(textApiUrl, textPayload, { timeout: 10000 }); // 10-second timeout
 
-    const textResponse = await axios.post(textApiUrl, textPayload);
-    const generatedText =
-      textResponse.data.candidates?.[0]?.content?.parts?.[0]?.text;
-
+    // Validate and extract generated text
+    if (!textResponse.data.candidates || textResponse.data.candidates.length === 0) {
+      throw new Error("No candidates returned from the Gemini API.");
+    }
+    const generatedText = textResponse.data.candidates[0].content.parts[0].text;
     if (!generatedText) {
-      throw new Error("No text generated.");
+      throw new Error("Generated text is empty.");
     }
 
-    // Optional: Generate images (disabled unless you enable image API access)
-    // const imagePrompt = `A vivid and eye-catching image that represents: "${topic}"`;
-    // const imageApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
-    // const imagePayload = {
-    //   instances: [{ prompt: imagePrompt }],
-    //   parameters: { sampleCount: 1 }
-    // };
-    // const imageResponse = await axios.post(imageApiUrl, imagePayload);
-    // const imageUrls = imageResponse.data.predictions.map(
-    //   (img) => `data:image/png;base64,${img.bytesBase64Encoded}`
-    // );
+    // Log success
+    console.log("Content generated successfully.");
 
-    // Return the final content
+    // Return successful response
     return {
       statusCode: 200,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         success: true,
         text: generatedText,
-        // images: imageUrls,
       }),
     };
   } catch (error) {
-    console.error("Error:", JSON.stringify(error?.response?.data || error.message));
+    // Enhanced error handling
+    let errorMessage = "An unexpected error occurred.";
+    if (error.response) {
+      errorMessage = error.response.data?.error?.message || "Gemini API returned an error.";
+    } else if (error.request) {
+      errorMessage = "No response received from the Gemini API.";
+    } else {
+      errorMessage = error.message;
+    }
+    console.error("Error:", errorMessage);
+
     return {
       statusCode: 500,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         success: false,
-        error: error?.response?.data?.error?.message || error.message,
+        error: errorMessage,
       }),
     };
   }
