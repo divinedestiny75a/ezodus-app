@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { GoogleAuth } = require('google-auth-library');
 
 exports.handler = async function(event, context) {
     if (event.httpMethod !== 'POST') {
@@ -7,36 +8,41 @@ exports.handler = async function(event, context) {
 
     try {
         const { topic, brandVoice } = JSON.parse(event.body);
-        const apiKey = process.env.GEMINI_API_KEY;
+        const projectId = 'ezodusapp'; // Your Google Cloud Project ID
 
-        if (!apiKey) {
-            return { statusCode: 500, body: JSON.stringify({ error: 'API key is not configured.' }) };
-        }
+        // --- Authenticate using the Service Account ---
+        const auth = new GoogleAuth({
+            credentials: {
+                client_email: process.env.GOOGLE_CLIENT_EMAIL,
+                private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+            },
+            scopes: 'https://www.googleapis.com/auth/cloud-platform',
+        });
+        const client = await auth.getClient();
+        const accessToken = (await client.getAccessToken()).token;
 
         // --- Step 1: Generate Text using Gemini ---
         const textPrompt = `Based on the following brand voice profile, write a compelling social media post about the topic provided. The post should be engaging and include relevant hashtags. Brand Voice Profile: ${brandVoice || 'Friendly, approachable, and professional.'} Topic: "${topic}"`;
-        const textApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-        const textPayload = { contents: [{ role: "user", parts: [{ text: textPrompt }] }] };
+        const textApiUrl = `https://us-central1-aiplatform.googleapis.com/v1/projects/${projectId}/locations/us-central1/publishers/google/models/gemini-1.0-pro:generateContent`;
+        const textPayload = { contents: [{ parts: [{ text: textPrompt }] }] };
         
-        const textResponse = await axios.post(textApiUrl, textPayload);
-        const generatedText = textResponse.data.candidates?.[0]?.content?.parts?.[0]?.text;
+        const textResponse = await axios.post(textApiUrl, textPayload, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
+        const generatedText = textResponse.data.candidates[0].content.parts[0].text;
 
         if (!generatedText) {
             throw new Error("AI did not return text content.");
         }
 
-        // --- Step 2: Generate Images using Imagen (The Correct, Simpler Way) ---
+        // --- Step 2: Generate Images using Imagen ---
         const imagePrompt = `A visually appealing, high-quality photograph for a social media post about: ${generatedText}. Do not include any text, words, or letters in the image.`;
-        
-        // THIS IS THE FIX: Using the correct, simpler API endpoint for Imagen that works with just an API key.
-        const imageApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
-        
-        const imagePayload = { 
-            instances: [{ prompt: imagePrompt }], 
-            parameters: { "sampleCount": 4 } 
-        };
+        const imageApiUrl = `https://us-central1-aiplatform.googleapis.com/v1/projects/${projectId}/locations/us-central1/publishers/google/models/imagen-3.0-generate-002:predict`;
+        const imagePayload = { instances: [{ prompt: imagePrompt }], parameters: { "sampleCount": 4 } };
 
-        const imageResponse = await axios.post(imageApiUrl, imagePayload);
+        const imageResponse = await axios.post(imageApiUrl, imagePayload, {
+            headers: { 'Authorization': `Bearer ${accessToken}` }
+        });
         
         const imageUrls = imageResponse.data.predictions.map(pred => `data:image/png;base64,${pred.bytesBase64Encoded}`);
 
