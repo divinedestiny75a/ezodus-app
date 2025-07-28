@@ -1,103 +1,67 @@
-const axios = require("axios");
+const axios = require('axios');
+const { GoogleAuth } = require('google-auth-library');
 
-exports.handler = async function (event, context) {
-  // Restrict to POST method
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 405, body: "Method Not Allowed" };
-  }
-
-  // Parse and validate request body
-  let data;
-  try {
-    data = JSON.parse(event.body);
-  } catch (parseError) {
-    return {
-      statusCode: 400,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Invalid JSON in request body." }),
-    };
-  }
-
-  const topic = data.topic ? data.topic.trim() : null;
-  const brandVoice = data.brandVoice ? data.brandVoice.trim() : null;
-
-  if (!topic) {
-    return {
-      statusCode: 400,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Topic is required." }),
-    };
-  }
-
-  // Retrieve API key from environment variables
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    return {
-      statusCode: 500,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ error: "Gemini API key is not configured in the environment variables." }),
-    };
-  }
-
-  try {
-    // Log input for debugging
-    console.log(`Generating content for topic: "${topic}", brandVoice: "${brandVoice || "default"}"`);
-
-    // Construct prompt for text generation
-    const textPrompt = `
-      Write a high-quality, engaging social media post based on the following topic and tone.
-      - Topic: ${topic}
-      - Tone: ${brandVoice || "Friendly, modern, and bold"}
-      - Style: Use hashtags, emojis, and a short call to action
-    `;
-
-    // Make API request to Gemini API
-    const textApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`;
-    const textPayload = {
-      contents: [{ role: "user", parts: [{ text: textPrompt }] }],
-    };
-    const textResponse = await axios.post(textApiUrl, textPayload, { timeout: 10000 }); // 10-second timeout
-
-    // Validate and extract generated text
-    if (!textResponse.data.candidates || textResponse.data.candidates.length === 0) {
-      throw new Error("No candidates returned from the Gemini API.");
-    }
-    const generatedText = textResponse.data.candidates[0].content.parts[0].text;
-    if (!generatedText) {
-      throw new Error("Generated text is empty.");
+exports.handler = async function(event, context) {
+    if (event.httpMethod !== 'POST') {
+        return { statusCode: 405, body: 'Method Not Allowed' };
     }
 
-    // Log success
-    console.log("Content generated successfully.");
+    try {
+        const { topic, brandVoice } = JSON.parse(event.body);
+        const projectId = 'ezodusapp'; 
 
-    // Return successful response
-    return {
-      statusCode: 200,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        success: true,
-        text: generatedText,
-      }),
-    };
-  } catch (error) {
-    // Enhanced error handling
-    let errorMessage = "An unexpected error occurred.";
-    if (error.response) {
-      errorMessage = error.response.data?.error?.message || "Gemini API returned an error.";
-    } else if (error.request) {
-      errorMessage = "No response received from the Gemini API.";
-    } else {
-      errorMessage = error.message;
+        // --- Authenticate using the Service Account ---
+        const auth = new GoogleAuth({
+            credentials: {
+                client_email: process.env.GOOGLE_CLIENT_EMAIL,
+                private_key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+            },
+            scopes: 'https://www.googleapis.com/auth/cloud-platform',
+        });
+        const client = await auth.getClient();
+        const accessToken = (await client.getAccessToken()).token;
+        
+        const headers = { 
+            'Authorization': `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+        };
+
+        // --- Step 1: Generate Text using Gemini ---
+        const textPrompt = `Based on the following brand voice profile, write a compelling social media post about the topic provided. The post should be engaging and include relevant hashtags. Brand Voice Profile: ${brandVoice || 'Friendly, approachable, and professional.'} Topic: "${topic}"`;
+        const textApiUrl = `https://us-central1-aiplatform.googleapis.com/v1/projects/${projectId}/locations/us-central1/publishers/google/models/gemini-1.0-pro:generateContent`;
+        const textPayload = { contents: [{ parts: [{ text: textPrompt }] }] };
+        
+        const textResponse = await axios.post(textApiUrl, textPayload, { headers });
+        const generatedText = textResponse.data.candidates[0].content.parts[0].text;
+
+        if (!generatedText) {
+            throw new Error("AI did not return text content.");
+        }
+
+        // --- Step 2: Generate Images using Imagen ---
+        const imagePrompt = `A visually appealing, high-quality photograph for a social media post about: ${generatedText}. Do not include any text, words, or letters in the image.`;
+        const imageApiUrl = `https://us-central1-aiplatform.googleapis.com/v1/projects/${projectId}/locations/us-central1/publishers/google/models/imagen-3.0-generate-002:predict`;
+        const imagePayload = { instances: [{ prompt: imagePrompt }], parameters: { "sampleCount": 4 } };
+
+        const imageResponse = await axios.post(imageApiUrl, imagePayload, { headers });
+        
+        const imageUrls = imageResponse.data.predictions.map(pred => `data:image/png;base64,${pred.bytesBase64Encoded}`);
+
+        if (!imageUrls || imageUrls.length === 0) {
+            throw new Error("AI did not return any images.");
+        }
+
+        // --- Step 3: Return Success ---
+        return {
+            statusCode: 200,
+            body: JSON.stringify({ success: true, text: generatedText, images: imageUrls }),
+        };
+
+    } catch (error) {
+        console.error("Full Error in generatePost function:", error.response ? error.response.data : error.message);
+        return {
+            statusCode: 500,
+            body: JSON.stringify({ success: false, error: "An internal error occurred while generating content." }),
+        };
     }
-    console.error("Error:", errorMessage);
-
-    return {
-      statusCode: 500,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        success: false,
-        error: errorMessage,
-      }),
-    };
-  }
 };
