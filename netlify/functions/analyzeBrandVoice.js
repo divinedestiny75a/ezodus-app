@@ -11,13 +11,17 @@ exports.handler = async function(event, context) {
     }
 
     try {
-        const { url } = JSON.parse(event.body);
+        let { url } = JSON.parse(event.body);
         if (!url) {
             return { statusCode: 400, body: JSON.stringify({ error: 'URL is required.' }) };
         }
 
+        // --- NEW: Append '/about' to get the best content from YouTube channels ---
+        if (url.includes('youtube.com/')) {
+            url = url.endsWith('/about') ? url : url + '/about';
+        }
+
         // --- 1. Scrape the text content from the provided URL ---
-        // We need to pretend to be a real browser to get the content from some sites.
         const headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         };
@@ -25,22 +29,23 @@ exports.handler = async function(event, context) {
         const $ = cheerio.load(data);
         let scrapedText = "";
 
-        // --- NEW: Intelligent Scraping Logic ---
-        // We will look for specific, high-value content instead of everything.
-        // For YouTube, the description is often in a meta tag.
-        const youtubeDescription = $('meta[property="og:description"]').attr('content');
-        if (youtubeDescription) {
-            scrapedText += youtubeDescription + " ";
+        // --- NEWER, Hyper-Targeted Scraping Logic ---
+        // For YouTube, the best text is in the "About" tab description.
+        // This is often found in specific meta tags or elements with specific IDs.
+        const aboutDescription = $('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content');
+        
+        if (aboutDescription) {
+            scrapedText += aboutDescription + " ";
         }
 
-        // Let's also grab video titles, which are often in 'a#video-title' links.
+        // As a secondary source, grab video titles if they exist.
         $('a#video-title').each((_idx, el) => {
             scrapedText += $(el).attr('title') + " ";
         });
         
-        // As a fallback, grab paragraphs if the specific selectors fail.
+        // As a final fallback, grab paragraphs.
         if (!scrapedText) {
-            $('p, h1, h2, h3').each((_idx, el) => {
+            $('p, h1, h2').each((_idx, el) => {
                 scrapedText += $(el).text() + " ";
             });
         }
@@ -49,11 +54,18 @@ exports.handler = async function(event, context) {
             return { statusCode: 400, body: JSON.stringify({ error: 'Could not find any meaningful text on that page.' }) };
         }
         
-        // Truncate for safety and to stay within API limits.
         scrapedText = scrapedText.substring(0, 4000);
 
-        // --- 2. Prepare the prompt for the AI ---
-        const prompt = `Analyze the following text from a social media page. Ignore any generic legal text like "copyright" or "terms of service". Describe the brand's voice in 3-5 bullet points, focusing on the tone, style, and personality. This analysis will be used to generate social media posts. Text: "${scrapedText}"`;
+        // --- 2. Prepare a much smarter prompt for the AI ---
+        const prompt = `
+            Analyze the following text scraped from a social media page or website. 
+            Your primary goal is to identify the unique brand voice of the creator or company.
+            **You MUST ignore generic, platform-level text such as 'Copyright', 'Terms of Service', 'Privacy Policy', 'Test new features', 'Advertise', 'Developers', etc.**
+            Focus ONLY on the text that reveals the brand's personality, tone, and style.
+            Describe this unique brand voice in 3-5 helpful bullet points for generating social media posts.
+
+            Scraped Text: "${scrapedText}"
+        `;
 
         // --- 3. Call the Gemini AI ---
         const apiKey = process.env.GEMINI_API_KEY;
